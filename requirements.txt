@@ -1,0 +1,20 @@
+# Версии — нижние границы. Проверено локально с: numpy 2.5, pandas 3.0, scikit-learn 1.9, torch 2.14,
+# mlflow 3.17, fastapi 0.143. Для воспроизводимости в проде зафиксируйте точные версии (pip freeze > requirements.lock).
+numpy>=1.26
+pandas>=2.2
+scikit-learn>=1.4
+joblib>=1.3
+pyarrow>=15            # parquet
+torch>=2.3             # в Docker ставится CPU-сборка
+pyspark>=4.0           # Java 17+; в Docker-образе OpenJDK 21 (PySpark 3.5 с Java 21 официально не поддерживается)
+mlflow>=3.0
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2.6
+sqlalchemy>=2.0
+psycopg2-binary>=2.9
+# --- разработка ---
+pytest>=8
+httpx>=0.27
+# Airflow ставится отдельно, строго по constraints-файлу (иначе конфликты зависимостей):
+#   https://airflow.apache.org/docs/apache-airflow/stable/installation/installing-from-pypi.html

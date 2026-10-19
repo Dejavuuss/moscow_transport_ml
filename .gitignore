@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.env
+.venv/
+mlflow.db
+mlruns/
+mlartifacts/
+data/raw/
+data/processed/
+artifacts/
+.pytest_cache/
+
+# личные заметки к собеседованию (только локально)
+docs/GUIDE.md

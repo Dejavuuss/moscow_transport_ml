@@ -1,0 +1,85 @@
+# PostgreSQL + MLflow + API; одноразовый контейнер pipeline запускается профилем "jobs".
+#   docker compose up -d postgres mlflow                       # инфраструктура
+#   docker compose --profile jobs run --rm pipeline            # API data.mos.ru -> PostgreSQL -> Spark -> обучение
+#   docker compose up -d api                                   # сервис
+# MOS_API_KEY и POSTGRES_PASSWORD берутся из файла .env (он в .gitignore).
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: transport
+      POSTGRES_USER: transport
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-transport}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # скрипты в docker-entrypoint-initdb.d выполняются по алфавиту при ПЕРВОМ старте
+      - ./data/init_mlflow_db.sql:/docker-entrypoint-initdb.d/00_mlflow_db.sql:ro
+      - ./data/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+    ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U transport -d transport"]
+      interval: 5s
+      retries: 10
+
+  mlflow:
+    image: python:3.11-slim
+    # Строки ниже с ОДИНАКОВЫМ отступом: в блоке ">-" они склеиваются через пробел в одну команду.
+    # (Строки с большим отступом YAML оставляет на отдельных строках, и sh выполнил бы их как
+    # отдельные команды: флаги --backend-store-uri и др. молча терялись.)
+    command:
+      - sh
+      - -c
+      - >-
+        pip install --no-cache-dir mlflow psycopg2-binary &&
+        exec mlflow server --host 0.0.0.0 --port 5000
+        --backend-store-uri postgresql+psycopg2://transport:${POSTGRES_PASSWORD:-transport}@postgres:5432/mlflow
+        --artifacts-destination /mlartifacts --serve-artifacts
+        --allowed-hosts mlflow,mlflow:5000,localhost,localhost:5000,127.0.0.1,127.0.0.1:5000
+    # MLflow 3 по умолчанию пускает только localhost и IP-адреса; без --allowed-hosts запросы
+    # из соседних контейнеров на http://mlflow:5000 получают 403.
+    volumes: ["mlartifacts:/mlartifacts"]
+    ports: ["5000:5000"]
+    depends_on:
+      postgres: {condition: service_healthy}
+    # pip install при старте занимает ~1 минуту: pipeline ждёт, пока сервер реально ответит
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  pipeline:
+    profiles: ["jobs"]
+    build: .
+    image: moscow-transport-ml          # один образ на pipeline и api, собирается один раз
+    environment:
+      MOS_API_KEY: ${MOS_API_KEY:?Задайте MOS_API_KEY в .env}
+      POSTGRES_HOST: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-transport}
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      GIT_PYTHON_REFRESH: quiet          # git в образе нет: без этого MLflow сыплет предупреждениями
+    command:
+      - sh
+      - -c
+      - >-
+        python -m src.ingest --to-postgres &&
+        python -m src.training --stage all --engine spark
+    volumes: ["./artifacts:/app/artifacts", "./data:/app/data"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      mlflow: {condition: service_healthy}
+
+  api:
+    build: .
+    image: moscow-transport-ml
+    environment:
+      POSTGRES_HOST: postgres
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MODEL_SOURCE: local
+    volumes: ["./artifacts:/app/artifacts:ro"]
+    ports: ["8000:8000"]
+
+volumes:
+  pgdata:
+  mlartifacts:
